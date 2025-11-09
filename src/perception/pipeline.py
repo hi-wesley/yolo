@@ -51,6 +51,7 @@ class PerceptionPipeline:
         writer = None
         output_video_path: Optional[Path] = Path(output_video) if output_video else None
         if output_video_path is not None:
+            output_video_path.parent.mkdir(parents=True, exist_ok=True)
             fourcc = cv2.VideoWriter_fourcc(*"mp4v")
             fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
             width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -123,6 +124,7 @@ class PerceptionPipeline:
 
     @staticmethod
     def _export_tracks(path: Path, rows: Iterable[Iterable[Union[int, float, str]]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
         fieldnames = [
             "frame",
             "track_id",
@@ -169,4 +171,3 @@ def build_default_pipeline(
         flow_kwargs={},
     )
     return pipeline
-

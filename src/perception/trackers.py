@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from typing import Dict, Iterable, List, Optional
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -104,53 +105,127 @@ class ByteTrackTracker(BaseTracker):
         class_names: Optional[Iterable[str]] = None,
     ) -> None:
         super().__init__()
-        try:
-            from ultralytics.yolo.utils.tracker import byte_tracker
-        except ImportError as exc:  # pragma: no cover - runtime guard
-            raise ImportError(
-                "ByteTrackTracker requires Ultralytics YOLO tracking utilities. "
-                "Install via `pip install ultralytics`."
-            ) from exc
-
-        args = byte_tracker.TrackerArgs(
-            track_thresh=track_thresh,
-            match_thresh=match_thresh,
-            track_buffer=track_buffer,
-        )
-        self._tracker = byte_tracker.BYTETracker(args, frame_rate=frame_rate)
         self._class_names = list(class_names) if class_names is not None else None
+        self._byte_tracker_backend = "legacy"
+        self._boxes_cls = None
+
+        try:
+            from ultralytics.yolo.utils.tracker import byte_tracker as legacy_byte_tracker
+        except ImportError:
+            legacy_byte_tracker = None
+
+        if legacy_byte_tracker is not None:
+            args = legacy_byte_tracker.TrackerArgs(
+                track_thresh=track_thresh,
+                match_thresh=match_thresh,
+                track_buffer=track_buffer,
+            )
+            self._tracker = legacy_byte_tracker.BYTETracker(args, frame_rate=frame_rate)
+        else:
+            try:
+                from ultralytics.trackers.byte_tracker import BYTETracker as ModernByteTracker
+                from ultralytics.engine.results import Boxes
+            except ImportError as exc:  # pragma: no cover - runtime guard
+                raise ImportError(
+                    "ByteTrackTracker requires Ultralytics tracking utilities. Install via `pip install ultralytics`."
+                ) from exc
+
+            low_thresh = min(track_thresh * 0.5, 0.1 if track_thresh >= 0.1 else track_thresh * 0.5)
+            args = SimpleNamespace(
+                tracker_type="bytetrack",
+                track_high_thresh=track_thresh,
+                track_low_thresh=low_thresh,
+                new_track_thresh=track_thresh,
+                track_buffer=track_buffer,
+                match_thresh=match_thresh,
+                fuse_score=True,
+            )
+            self._tracker = ModernByteTracker(args=args, frame_rate=frame_rate)
+            self._byte_tracker_backend = "modern"
+            self._boxes_cls = Boxes
 
     def update(self, detections: List[Detection], frame: np.ndarray) -> List[TrackState]:
-        try:
-            from ultralytics.yolo.utils.tracker.byte_tracker import STrack
-        except ImportError:  # pragma: no cover - runtime guard
-            STrack = None  # type: ignore[assignment]
+        if self._byte_tracker_backend == "legacy":
+            try:
+                from ultralytics.yolo.utils.tracker.byte_tracker import STrack
+            except ImportError:  # pragma: no cover - runtime guard
+                STrack = None  # type: ignore[assignment]
 
+            for track_state in self._active_tracks.values():
+                track_state.age += 1
+
+            det_array = np.empty((0, 6), dtype=np.float32)
+            if detections:
+                rows = []
+                for det in detections:
+                    x1, y1, x2, y2 = det.bbox
+                    rows.append([x1, y1, x2, y2, det.confidence, det.class_id])
+                det_array = np.asarray(rows, dtype=np.float32)
+
+            img_h, img_w = frame.shape[:2]
+            online_targets = self._tracker.update(det_array, (img_h, img_w), (img_h, img_w))
+
+            updates: List[TrackState] = []
+            for track in online_targets:
+                if hasattr(track, "tlbr"):
+                    x1, y1, x2, y2 = track.tlbr
+                else:
+                    tlwh = track.tlwh
+                    x1, y1, w, h = tlwh
+                    x2, y2 = x1 + w, y1 + h
+                track_id = int(track.track_id)
+                score = float(getattr(track, "score", 0.0))
+                class_id = int(getattr(track, "cls", -1))
+                name = None
+                if self._class_names is not None and 0 <= class_id < len(self._class_names):
+                    name = self._class_names[class_id]
+
+                state = self._active_tracks.get(track_id)
+                if state is None:
+                    state = TrackState(
+                        track_id=track_id,
+                        bbox=(float(x1), float(y1), float(x2), float(y2)),
+                        confidence=score,
+                        class_id=class_id,
+                        class_name=name,
+                    )
+                state.class_id = class_id
+                state.class_name = name
+                state.confidence = score if score > 0 else state.confidence
+                state.register_observation((float(x1), float(y1), float(x2), float(y2)))
+                state.age = 0
+                updates.append(state)
+
+            return self._finalize_tracks(updates)
+
+        # Modern Ultralytics tracker path operating on Boxes objects.
         for track_state in self._active_tracks.values():
             track_state.age += 1
 
-        det_array = np.empty((0, 6), dtype=np.float32)
         if detections:
             rows = []
             for det in detections:
                 x1, y1, x2, y2 = det.bbox
                 rows.append([x1, y1, x2, y2, det.confidence, det.class_id])
-            det_array = np.asarray(rows, dtype=np.float32)
+            det_data = np.asarray(rows, dtype=np.float32)
+        else:
+            det_data = np.zeros((0, 6), dtype=np.float32)
 
         img_h, img_w = frame.shape[:2]
-        online_targets = self._tracker.update(det_array, (img_h, img_w), (img_h, img_w))
+        boxes = self._boxes_cls(det_data, (img_h, img_w))
+        raw_tracks = self._tracker.update(boxes, frame)
 
         updates: List[TrackState] = []
-        for track in online_targets:
-            if hasattr(track, "tlbr"):
-                x1, y1, x2, y2 = track.tlbr
-            else:
-                tlwh = track.tlwh
-                x1, y1, w, h = tlwh
-                x2, y2 = x1 + w, y1 + h
-            track_id = int(track.track_id)
-            score = float(getattr(track, "score", 0.0))
-            class_id = int(getattr(track, "cls", -1))
+        for trk in raw_tracks:
+            if trk.size < 7:
+                continue
+            bbox_vals = trk[:-4]
+            if bbox_vals.size < 4:
+                continue
+            x1, y1, x2, y2 = bbox_vals[:4]
+            track_id = int(trk[-4])
+            score = float(trk[-3])
+            class_id = int(trk[-2]) if not np.isnan(trk[-2]) else -1
             name = None
             if self._class_names is not None and 0 <= class_id < len(self._class_names):
                 name = self._class_names[class_id]

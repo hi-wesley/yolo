@@ -38,19 +38,51 @@ Getting Started
    pip install -r requirements.txt
    ```
 
+Optional: install CUDA-enabled PyTorch/Torchvision (requires an NVIDIA GPU with matching drivers):
+
+```powershell
+python -m pip install --upgrade torch torchvision --index-url https://download.pytorch.org/whl/cu124
+```
+
 3. Download YOLOv8 weights (the Ultralytics package auto-downloads them on first run with network access). You can also provide a local `.pt` file via `--weights`.
 
 Running the Pipeline
 --------------------
 
-```
+Bash / WSL / Git Bash (multi-line):
+
+```bash
 PYTHONPATH=src python scripts/run_pipeline.py \
-  --source path/to/video.mp4 \
+  --source 'BIBBIDIBA - Hoshimachi Suisei.mp4' \
   --weights yolov8n.pt \
   --tracker bytetrack \
-  --device cuda \
+  --device cpu \
   --output-video outputs/annotated.mp4 \
   --output-tracks outputs/tracks.csv
+```
+
+Bash / WSL / Git Bash (single-line):
+
+```bash
+PYTHONPATH=src python scripts/run_pipeline.py --source 'BIBBIDIBA - Hoshimachi Suisei.mp4' --weights yolov8n.pt --tracker bytetrack --device cpu --output-video outputs/annotated.mp4 --output-tracks outputs/tracks.csv
+```
+
+Bash / WSL / Git Bash (CUDA single-line example):
+
+```bash
+PYTHONPATH=src python scripts/run_pipeline.py --source 'BIBBIDIBA - Hoshimachi Suisei.mp4' --weights yolov8n.pt --tracker bytetrack --device cuda --output-video outputs/annotated.mp4 --output-tracks outputs/tracks.csv
+```
+
+PowerShell (copy/paste friendly single line):
+
+```powershell
+$env:PYTHONPATH="src"; python scripts/run_pipeline.py --source "BIBBIDIBA - Hoshimachi Suisei.mp4" --weights yolov8n.pt --tracker bytetrack --device cpu --output-video outputs/annotated.mp4 --output-tracks outputs/tracks.csv
+```
+
+GPU variant (after installing the CUDA wheel above):
+
+```powershell
+$env:PYTHONPATH="src"; python scripts/run_pipeline.py --source "BIBBIDIBA - Hoshimachi Suisei.mp4" --weights yolov8n.pt --tracker bytetrack --device cuda --output-video outputs/annotated.mp4 --output-tracks outputs/tracks.csv
 ```
 
 Key options:
@@ -79,3 +111,10 @@ Next Steps
 - Fuse GPS/IMU odometry to stabilize trajectories in world coordinates.
 - Profile end-to-end latency to validate real-time constraints on target hardware.
 
+Performance Notes (Why This Demo Is Slower Than Production AD Stacks)
+--------------------------------------------------------------------
+
+- This repository is a Python reference implementation meant for clarity and experimentation. Real ADAS/robotics perception stacks run highly optimized C++/CUDA code on embedded GPUs/ASICs (e.g., NVIDIA Drive) with quantized models, sensor fusion, and tight scheduling across accelerators.
+- The demo processes full-resolution MP4 files frame-by-frame on the host CPU/GPU, computes dense optical flow (Farneback by default), draws overlays, and re-encodes video—steps that production systems either hardware-accelerate or skip entirely.
+- Vehicle platforms stream raw camera data directly into GPU memory, run INT8/FP16-optimized models, estimate motion via IMU/stereo/flow accelerators, and publish lightweight track summaries to downstream planners. Visualization is usually optional and downsampled.
+- To speed up this demo: disable flow (`--flow-method none`), lower input resolution, process every Nth frame via `--skip-frames`, or use smaller YOLO weights. Expect real autonomous-driving latency only with purpose-built hardware and optimized low-level implementations.
