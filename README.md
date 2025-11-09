@@ -1,6 +1,10 @@
 Perception Model (Detection + Tracking)
 ======================================
 
+[Link to Demo](https://www.youtube.com/watch?v=nIukFJ31e8A)
+
+![Screenshot](https://i.imgur.com/apwDCl3.png)
+
 This project provides a modular perception pipeline that detects and tracks multiple objects frame-to-frame and visualizes their trajectories. It demonstrates core skills for ADAS/robotics perception stacks: object detection, multi-object tracking, motion reasoning, and real-time visualization.
 
 Features
